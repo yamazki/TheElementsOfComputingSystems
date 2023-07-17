@@ -1,0 +1,132 @@
+// This file is part of www.nand2tetris.org
+// and the book "The Elements of Computing Systems"
+// by Nisan and Schocken, MIT Press.
+// File name: projects/05/CPU.hdl
+
+/**
+ * The Hack CPU (Central Processing unit), consisting of an ALU,
+ * two registers named A and D, and a program counter named PC.
+ * The CPU is designed to fetch and execute instructions written in 
+ * the Hack machine language. In particular, functions as follows:
+ * Executes the inputted instruction according to the Hack machine 
+ * language specification. The D and A in the language specification
+ * refer to CPU-resident registers, while M refers to the external
+ * memory location addressed by A, i.e. to Memory[A]. The inM input 
+ * holds the value of this location. If the current instruction needs 
+ * to write a value to M, the value is placed in outM, the address 
+ * of the target location is placed in the addressM output, and the 
+ * writeM control bit is asserted. (When writeM==0, any value may 
+ * appear in outM). The outM and writeM outputs are combinational: 
+ * they are affected instantaneously by the execution of the current 
+ * instruction. The addressM and pc outputs are clocked: although they 
+ * are affected by the execution of the current instruction, they commit 
+ * to their new values only in the next time step. If reset==1 then the 
+ * CPU jumps to address 0 (i.e. pc is set to 0 in next time step) rather 
+ * than to the address resulting from executing the current instruction. 
+ */
+
+CHIP CPU {
+
+    IN  inM[16],         // M value input  (M = contents of RAM[A])
+        instruction[16], // Instruction for execution
+        reset;           // Signals whether to re-start the current
+                         // program (reset==1) or continue executing
+                         // the current program (reset==0).
+
+    OUT outM[16],        // M value output
+        writeM,          // Write to M? 
+        addressM[15],    // Address in data memory (of M)
+        pc[15];          // address of next instruction
+
+    PARTS:
+
+    // CPU命令は「i xx a cccccc ddd jjj」の形式でとなっている。
+
+    // iビットは命令の種類を表す。0が「A命令」、1が「D命令」
+    // aビットによってALUが「Aレジスタ」か「メモリ入力」のどちらを操作するかを決定する。
+    // ｃビットによって、ALUが実行する関数が決定される。
+    // dビットによってALUの結果をレジスタに格納するかどうかを決定する。並びを d1d2d3 とすると、
+    //   d1 は Aレジスタ、 d2はDレジスタ、d3はMemory[A]となる。
+
+    // A命令の場合は上記値はどうなる？
+    //  全部０？
+    //  Muxでそれぞれの値を取る？
+
+    // abit
+    // 0がAレジスタ操作で、1がメモリ操作？
+    Mux(a=false, b=instruction[12], sel=instruction[15], out=aBit);
+
+    // cbit
+    // 多分ここが間違っている。
+    Mux(a=false, b=instruction[11], sel=instruction[15], out=zx);
+    Mux(a=false, b=instruction[10], sel=instruction[15], out=nx);
+    Mux(a=false, b=instruction[9], sel=instruction[15], out=zy);
+    Mux(a=false, b=instruction[8], sel=instruction[15], out=ny);
+    Mux(a=false, b=instruction[7], sel=instruction[15], out=f);
+    Mux(a=false, b=instruction[6], sel=instruction[15], out=no);
+
+    // dbit
+    // Aレジスタに格納するか？ A命令の場合はtrue?
+    Mux(a=true, b=instruction[5], sel=instruction[15], out=d1); 
+    // Dレジスタに格納するか？
+    Mux(a=false, b=instruction[4], sel=instruction[15], out=d2);
+    // Memory[A]に格納するか？, writeMの出力となる。
+    Mux(a=false, b=instruction[3], sel=instruction[15], out=writeM);
+
+    // jbit
+    Mux(a=false, b=instruction[2], sel=instruction[15], out=j1);
+    Mux(a=false, b=instruction[1], sel=instruction[15], out=j2);
+    Mux(a=false, b=instruction[0], sel=instruction[15], out=j3);
+
+    // i = 0ならば、Aレジスタにinstructionの値を格納する。
+    // i = 1ならば、C命令の実行をする。
+    Mux16(a=instruction, b=outToM, sel=instruction[15], out=iOut);
+
+    // Aレジスタから値を取り出す。
+    // dビットのd1によって制御
+    Register(in=iOut, load=d1, out=AregisterOut);
+
+    // aビットの値により、「Aレジスタ」か「メモリ内容」のどちらをALUにわたすかを決定する。
+    Mux16(a=AregisterOut, b=inM, sel=aBit, out=outForALU);
+
+    // ALUの出力をする。
+    ALU(x=DregisterOut, y=outForALU, zx=zx, nx=nx, zy=zy, ny=ny, f=f, no=no, out=outToM, zr=zr, ng=ng);
+
+    // outM出力
+    And16(a=outToM, b=true, out=outM);
+
+    // Dレジスタへの格納
+    Register(in=outToM, load=d2, out=DregisterOut);
+
+    // Aレジスタの値を addressMに変換
+    And16(a=AregisterOut, b=true, out[0..14]=addressM);
+
+
+    // 計算結果がおかしい。
+    // @1000 
+    // D=D-M の答えは-1になるはず。
+
+    // ALUのzr,ngとjump領域の値から命令を実行する。
+    // ng=1 -> out<0, j1
+    // zr=1 -> out=0, j2
+    // zr=0 && ng=0 -> out >0, j3
+
+    // j1, j2と ng, zrによるジャンプ判定
+    And(a=ng, b=j1, out=j1Out);
+    And(a=zr, b=j2, out=j2Out);
+
+    // j3と自然数かどうかによるジャンプ判定
+    Or(a=zr, b=ng, out=zrngOut);
+    Not(in=zrngOut, out=isPlus);
+    And(a=isPlus, b=j3, out=j3Out);
+
+    Or(a=j1Out, b=j2Out, out=j1j2Out);
+    Or(a=j1j2Out, b=j3Out, out=isJump);
+    Not(in=isJump, out=isInc);
+
+    PC(in=AregisterOut, load=isJump, inc=isInc, reset=reset, out[0..14]=pc);
+
+
+
+
+}
